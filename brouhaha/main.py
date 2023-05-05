@@ -297,7 +297,7 @@ class ApplyCommand(BaseCommand):
             Path(args.model_path),
             strict=False,
         )
-        pipeline = RegressiveActivityDetectionPipeline(segmentation=model)
+        pipeline = RegressiveActivityDetectionPipeline(segmentation=model, skip_aggregation=True)
 
         if args.params is not None:
             params_path = Path(args.params)

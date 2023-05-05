@@ -1,7 +1,6 @@
 from typing import Optional, Union, Callable
 
 import numpy as np
-from pyannote.audio import Inference
 from pyannote.audio.core.io import AudioFile
 from pyannote.audio.core.pipeline import Pipeline
 from pyannote.audio.pipelines.utils import (
@@ -18,6 +17,7 @@ from pyannote.metrics.detection import (
 from pyannote.pipeline.parameter import Uniform
 
 from .utils.metrics import CustomMeanAbsoluteError, OptimalFScore
+from .inference import CustomInference
 
 
 class RegressiveActivityDetectionPipeline(Pipeline):
@@ -63,7 +63,7 @@ class RegressiveActivityDetectionPipeline(Pipeline):
         # inference_kwargs["pre_aggregation_hook"] = lambda scores: np.max(
         #     scores, axis=-1, keepdims=True
         # )
-        self._segmentation = Inference(model, **inference_kwargs)
+        self._segmentation = CustomInference(model, **inference_kwargs)
         self._frames = self._segmentation.model.introspection.frames
 
         self._audio = model.audio

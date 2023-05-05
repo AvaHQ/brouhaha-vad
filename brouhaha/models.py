@@ -1,8 +1,11 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from pyannote.audio import Model
+from pyannote.audio.core.task import Task
 from pyannote.audio.models.segmentation import PyanNet
 from pyannote.audio.models.segmentation.debug import SimpleSegmentationModel
 
@@ -77,6 +80,30 @@ class CustomSimpleSegmentationModel(RegressiveSegmentationModelMixin, SimpleSegm
 
 
 class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
+    SINCNET_WINDOW_SIZE_SAMPLES = 991
+    SINCNET_STEP_SAMPLES = 270
+
+    def __init__(
+        self,
+        sincnet: dict = None,
+        lstm: dict = None,
+        linear: dict = None,
+        sample_rate: int = 16000,
+        num_channels: int = 1,
+        task: Optional[Task] = None,
+        num_new_frames: int = 6,  # Number of frames which are new to the lstm after we
+                                  # apply sincnet
+    ):
+        super().__init__(
+            sincnet=sincnet,
+            lstm=lstm,
+            linear=linear,
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+            task=task,
+        )
+        self.num_new_frames = num_new_frames
+
     def build(self):
         if self.hparams.linear["num_layers"] > 0:
             in_features = self.hparams.linear["hidden_size"]
@@ -87,3 +114,36 @@ class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
         nb_classif = len(set(self.specifications.classes) - set(['snr', 'c50']))
         self.classifier = CustomClassifier(in_features, nb_classif)
         self.activation = CustomActivation()
+
+    def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
+        """Pass forward
+
+        Parameters
+        ----------
+        waveforms : (batch, channel, sample)
+
+        Returns
+        -------
+        scores : (batch, frame, classes)
+        """
+
+        outputs = self.sincnet(waveforms)
+
+        # Only keep new frames
+        outputs = outputs[:, :, -self.num_new_frames:]
+        if self.hparams.lstm["monolithic"]:
+            outputs, _ = self.lstm(
+                rearrange(outputs, "batch feature frame -> batch frame feature")
+            )
+        else:
+            outputs = rearrange(outputs, "batch feature frame -> batch frame feature")
+            for i, lstm in enumerate(self.lstm):
+                outputs, _ = lstm(outputs)
+                if i + 1 < self.hparams.lstm["num_layers"]:
+                    outputs = self.dropout(outputs)
+
+        if self.hparams.linear["num_layers"] > 0:
+            for linear in self.linear:
+                outputs = F.leaky_relu(linear(outputs))
+
+        return self.activation(self.classifier(outputs))
