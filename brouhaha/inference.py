@@ -127,12 +127,12 @@ class CustomInference(Inference):
                 self.progress_hook(c, num_first_chunks + num_chunks + has_last_chunk)
 
         # slide over audio chunks in batch
-        for c in np.arange(0, num_chunks, self.batch_size):
-            batch: torch.Tensor = chunks[c : c + self.batch_size]
+        for c in np.arange(0, num_chunks):
+            batch: torch.Tensor = chunks[c]
             outputs.append(self.infer(batch))
             if self.progress_hook is not None:
                 self.progress_hook(
-                    num_first_chunks + c + self.batch_size,
+                    num_first_chunks + c + 1,
                     num_first_chunks + num_chunks + has_last_chunk
                 )
 

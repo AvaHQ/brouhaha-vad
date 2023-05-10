@@ -103,6 +103,15 @@ class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
             task=task,
         )
         self.num_new_frames = num_new_frames
+        self.hx = None
+
+    def reset_backward_pass(self, hx):
+        hn = hx[0].clone()
+        cn = hx[1].clone()
+        selection = range(1, hn.shape[0], 2)
+        hn[selection, :, :] = 0
+        cn[selection, :, :] = 0
+        return (hn, cn)
 
     def build(self):
         if self.hparams.linear["num_layers"] > 0:
@@ -132,15 +141,17 @@ class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
         # Only keep new frames
         outputs = outputs[:, :, -self.num_new_frames:]
         if self.hparams.lstm["monolithic"]:
-            outputs, _ = self.lstm(
-                rearrange(outputs, "batch feature frame -> batch frame feature")
+            outputs, self.hx = self.lstm(
+                rearrange(outputs, "batch feature frame -> batch frame feature"),
+                self.hx,
             )
         else:
             outputs = rearrange(outputs, "batch feature frame -> batch frame feature")
             for i, lstm in enumerate(self.lstm):
-                outputs, _ = lstm(outputs)
+                outputs, self.hx = lstm(outputs, self.hx)
                 if i + 1 < self.hparams.lstm["num_layers"]:
                     outputs = self.dropout(outputs)
+        self.hx = self.reset_backward_pass(self.hx)
 
         if self.hparams.linear["num_layers"] > 0:
             for linear in self.linear:
