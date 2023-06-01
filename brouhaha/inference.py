@@ -72,9 +72,10 @@ class CustomInference(Inference):
         elif resolution == Resolution.FRAME:
             frames = introspection.frames
         frame_step_size = int(frames.step * sample_rate)
-        step_size: int = frame_step_size * self.model.num_new_frames
+        step_size: int = frame_step_size * self.model.num_current_frames
         sincnet_real_window_size_samples = 991
-        window_size_output = sincnet_real_window_size_samples + frame_step_size * (self.model.num_new_frames - 1)
+        num_frames_per_window = self.model.num_current_frames + self.model.num_future_frames
+        window_size_output = sincnet_real_window_size_samples + frame_step_size * (num_frames_per_window - 1)
 
         # prepare first (incomplete) chunks
         if num_samples >= window_size_output:
@@ -118,39 +119,44 @@ class CustomInference(Inference):
         outputs: Union[List[np.ndarray], np.ndarray] = list()
 
         if self.progress_hook is not None:
-            self.progress_hook(0, num_first_chunks + num_chunks + has_last_chunk)
+            self.progress_hook(0, num_first_chunks + num_chunks + has_last_chunk + 1)
 
         # process first chunks
+        valid_preds = slice(-num_frames_per_window, -self.model.num_future_frames)
         for c in np.arange(0, num_first_chunks):
-            outputs.append(self.infer(first_chunks[c]))
+            outputs.append(self.infer(first_chunks[c])[:, valid_preds, :])
             if self.progress_hook is not None:
-                self.progress_hook(c, num_first_chunks + num_chunks + has_last_chunk)
+                self.progress_hook(c, num_first_chunks + num_chunks + has_last_chunk + 1)
 
         # slide over audio chunks in batch
         for c in np.arange(0, num_chunks):
             batch: torch.Tensor = chunks[c]
-            outputs.append(self.infer(batch))
+            preds = self.infer(chunks[c])
+            outputs.append(preds[:, valid_preds, :])
             if self.progress_hook is not None:
                 self.progress_hook(
                     num_first_chunks + c + 1,
-                    num_first_chunks + num_chunks + has_last_chunk
+                    num_first_chunks + num_chunks + has_last_chunk + 1
                 )
 
         # process orphan last chunk
         if has_last_chunk:
-
             last_output = self.infer(last_chunk[None])[:, -num_last_frames:, :]
 
             if specifications.resolution == Resolution.FRAME:
-                pad = self.model.num_new_frames - last_output.shape[1]
+                pad = num_frames_per_window - last_output.shape[1]
                 last_output = np.pad(last_output, ((0, 0), (0, pad), (0, 0)))
 
-            outputs.append(last_output)
-            if self.progress_hook is not None:
-                self.progress_hook(
-                    num_first_chunks + num_chunks + has_last_chunk,
-                    num_first_chunks + num_chunks + has_last_chunk
-                )
+            outputs.append(last_output[:, :6, :])
+            outputs.append(last_output[:, 6:, :])
+        else:
+            # add predictions for last chunk from last inference
+            outputs.append(preds[:, 6:, :])
+        if self.progress_hook is not None:
+            self.progress_hook(
+                num_first_chunks + num_chunks + has_last_chunk + 1,
+                num_first_chunks + num_chunks + has_last_chunk + 1
+            )
 
         outputs = np.vstack(outputs)
 
