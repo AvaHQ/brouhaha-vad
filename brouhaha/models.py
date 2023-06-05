@@ -91,8 +91,8 @@ class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
         sample_rate: int = 16000,
         num_channels: int = 1,
         task: Optional[Task] = None,
-        num_current_frames: int = 6,  # Number of frames we want to process at each step
-        num_future_frames: int = 6,  # Number of future frames we want to use as context
+        num_new_frames: int = 6,  # Number of frames which are new to the lstm after we
+                                  # apply sincnet
     ):
         super().__init__(
             sincnet=sincnet,
@@ -102,16 +102,8 @@ class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
             num_channels=num_channels,
             task=task,
         )
-        self.num_current_frames = num_current_frames
-        self.num_future_frames = num_future_frames
-        # In pytorch, you can't retrieve intermediate hidden states, which we would need
-        # if we want to use some future context (in order to restart from the end of
-        # the last data we actually processed)
-        # Assuming the number of frames to process is the same as the number of frames
-        # of future context, a work-around is to keep track of two hidden states and
-        # alternate between them
+        self.num_new_frames = num_new_frames
         self.hx = None
-        self.hx_prev = None
 
     def reset_backward_pass(self, hx):
         hn = hx[0].clone()
@@ -146,23 +138,20 @@ class CustomPyanNetModel(RegressiveSegmentationModelMixin, PyanNet):
 
         outputs = self.sincnet(waveforms)
 
-        # Only keep current and future frames
-        first_index = - (self.num_current_frames + self.num_future_frames)
-        outputs = outputs[:, :, first_index:]
-        hx = self.hx
-        self.hx = self.hx_prev
+        # Only keep new frames
+        outputs = outputs[:, :, -self.num_new_frames:]
         if self.hparams.lstm["monolithic"]:
-            outputs, self.hx_prev = self.lstm(
+            outputs, self.hx = self.lstm(
                 rearrange(outputs, "batch feature frame -> batch frame feature"),
-                hx,
+                self.hx,
             )
         else:
             outputs = rearrange(outputs, "batch feature frame -> batch frame feature")
             for i, lstm in enumerate(self.lstm):
-                outputs, self.hx_prev = lstm(outputs, hx)
+                outputs, self.hx = lstm(outputs, self.hx)
                 if i + 1 < self.hparams.lstm["num_layers"]:
                     outputs = self.dropout(outputs)
-        self.hx = self.reset_backward_pass(self.hx_prev)
+        self.hx = self.reset_backward_pass(self.hx)
 
         if self.hparams.linear["num_layers"] > 0:
             for linear in self.linear:
